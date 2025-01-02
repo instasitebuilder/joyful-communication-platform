@@ -35,8 +35,8 @@ serve(async (req) => {
     console.log('Fetched broadcast:', broadcast);
 
     // Call ClaimBuster API
-    const apiKey = Deno.env.get('CLAIMBUSTER_API_KEY');
-    if (!apiKey) {
+    const claimBusterKey = Deno.env.get('CLAIMBUSTER_API_KEY');
+    if (!claimBusterKey) {
       throw new Error('CLAIMBUSTER_API_KEY is not set');
     }
 
@@ -46,52 +46,65 @@ serve(async (req) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKey,
+          'x-api-key': claimBusterKey,
         },
         body: JSON.stringify({ text: broadcast.content }),
       }
     );
 
     console.log('ClaimBuster API Status:', claimBusterResponse.status);
-    const responseText = await claimBusterResponse.text();
-    console.log('ClaimBuster Raw Response:', responseText);
+    const claimBusterText = await claimBusterResponse.text();
+    console.log('ClaimBuster Raw Response:', claimBusterText);
 
     if (!claimBusterResponse.ok) {
-      throw new Error(`ClaimBuster API error: ${responseText}`);
+      throw new Error(`ClaimBuster API error: ${claimBusterText}`);
     }
 
     let claimBusterData;
     try {
-      claimBusterData = JSON.parse(responseText);
+      claimBusterData = JSON.parse(claimBusterText);
     } catch (e) {
       console.error('Failed to parse ClaimBuster response:', e);
       throw new Error('Invalid JSON response from ClaimBuster API');
     }
 
-    console.log('Parsed ClaimBuster response:', claimBusterData);
-
-    if (!claimBusterData.results || !Array.isArray(claimBusterData.results) || claimBusterData.results.length === 0) {
-      console.error('Invalid response structure:', claimBusterData);
-      throw new Error('Invalid response structure from ClaimBuster API');
+    // Call Google Fact Check API
+    const googleKey = Deno.env.get('GOOGLE_FACT_CHECK_API_KEY');
+    if (!googleKey) {
+      throw new Error('GOOGLE_FACT_CHECK_API_KEY is not set');
     }
 
-    const result = claimBusterData.results[0];
-    if (typeof result.score !== 'number') {
-      console.error('Invalid score type:', result);
-      throw new Error('Invalid score format from ClaimBuster API');
-    }
+    const query = encodeURIComponent(broadcast.content);
+    const googleResponse = await fetch(
+      `https://factchecktools.googleapis.com/v1alpha1/claims:search?key=${googleKey}&query=${query}`
+    );
 
-    // Calculate confidence based on ClaimBuster score
-    const confidence = Math.round(result.score * 100);
-    console.log('Calculated confidence:', confidence);
+    console.log('Google Fact Check API Status:', googleResponse.status);
+    const googleData = await googleResponse.json();
+    console.log('Google Fact Check Response:', googleData);
 
-    // Update the broadcast with AI processing results
+    // Combine results from both APIs
+    const claimBusterConfidence = claimBusterData.results?.[0]?.score 
+      ? Math.round(claimBusterData.results[0].score * 100)
+      : 0;
+
+    const googleClaims = googleData.claims || [];
+    const googleVerified = googleClaims.some(claim => 
+      claim.claimReview?.[0]?.textualRating?.toLowerCase().includes('true') ||
+      claim.claimReview?.[0]?.textualRating?.toLowerCase().includes('correct')
+    );
+
+    // Calculate combined confidence
+    const confidence = googleVerified ? Math.max(claimBusterConfidence, 80) : claimBusterConfidence;
+    const status = confidence > 80 ? 'verified' : confidence < 40 ? 'debunked' : 'flagged';
+
+    // Update the broadcast
     const { error: updateError } = await supabaseClient
       .from('broadcasts')
       .update({
         confidence: confidence,
         api_processed: true,
-        status: confidence > 80 ? 'flagged' : 'pending'
+        status: status
       })
       .eq('id', broadcastId);
 
@@ -100,24 +113,47 @@ serve(async (req) => {
       throw new Error('Failed to update broadcast');
     }
 
-    // Create a fact check entry
+    // Create fact check entries for both APIs
+    const factChecks = [];
+    
+    // ClaimBuster fact check
+    factChecks.push({
+      broadcast_id: broadcastId,
+      verification_source: 'ClaimBuster API',
+      explanation: `Claim check score: ${claimBusterConfidence}%`,
+      confidence_score: claimBusterConfidence,
+      verification_method: 'ai'
+    });
+
+    // Google fact checks
+    googleClaims.forEach(claim => {
+      if (claim.claimReview?.[0]) {
+        factChecks.push({
+          broadcast_id: broadcastId,
+          verification_source: 'Google Fact Check API',
+          explanation: claim.claimReview[0].textualRating,
+          confidence_score: googleVerified ? 90 : 30,
+          verification_method: 'google'
+        });
+      }
+    });
+
     const { error: factCheckError } = await supabaseClient
       .from('fact_checks')
-      .insert({
-        broadcast_id: broadcastId,
-        verification_source: 'ClaimBuster API',
-        explanation: `Claim check score: ${confidence}%`,
-        confidence_score: confidence,
-        verification_method: 'ai'
-      });
+      .insert(factChecks);
 
     if (factCheckError) {
-      console.error('Failed to create fact check:', factCheckError);
-      throw new Error('Failed to create fact check');
+      console.error('Failed to create fact checks:', factCheckError);
+      throw new Error('Failed to create fact checks');
     }
 
     return new Response(
-      JSON.stringify({ success: true, confidence }),
+      JSON.stringify({ 
+        success: true, 
+        confidence,
+        googleClaims: googleData.claims || [],
+        claimBusterScore: claimBusterConfidence 
+      }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 

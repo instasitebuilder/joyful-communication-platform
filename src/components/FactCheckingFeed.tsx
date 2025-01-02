@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, CheckCircle, XCircle, Brain } from "lucide-react";
+import { AlertTriangle, CheckCircle, XCircle, Brain, MessageSquare } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
@@ -17,17 +17,40 @@ type FactCheckItem = {
   api_processed?: boolean;
   created_at?: string | null;
   updated_at?: string | null;
+  video_url?: string | null;
+  transcript_status?: string | null;
+  video_title?: string | null;
+};
+
+type FactCheck = {
+  id: number;
+  broadcast_id: number;
+  verification_source: string;
+  explanation: string;
+  confidence_score: number | null;
+  created_at: string | null;
 };
 
 const fetchBroadcasts = async () => {
-  const { data, error } = await supabase
+  const { data: broadcasts, error: broadcastsError } = await supabase
     .from("broadcasts")
     .select("*")
     .order("created_at", { ascending: false })
     .limit(10);
 
-  if (error) throw error;
-  return data as FactCheckItem[];
+  if (broadcastsError) throw broadcastsError;
+
+  // Fetch fact checks for each broadcast
+  const factChecksPromises = broadcasts.map(async (broadcast) => {
+    const { data: factChecks } = await supabase
+      .from("fact_checks")
+      .select("*")
+      .eq("broadcast_id", broadcast.id);
+    return { ...broadcast, factChecks };
+  });
+
+  const broadcastsWithFactChecks = await Promise.all(factChecksPromises);
+  return broadcastsWithFactChecks;
 };
 
 const StatusIcon = ({ status }: { status: FactCheckItem["status"] }) => {
@@ -44,7 +67,7 @@ const StatusIcon = ({ status }: { status: FactCheckItem["status"] }) => {
 };
 
 const FactCheckingFeed = () => {
-  const [items, setItems] = useState<FactCheckItem[]>([]);
+  const [items, setItems] = useState<(FactCheckItem & { factChecks?: FactCheck[] })[]>([]);
   const { toast } = useToast();
 
   const { data: initialData, isLoading } = useQuery({
@@ -151,6 +174,17 @@ const FactCheckingFeed = () => {
               <StatusIcon status={item.status || "pending"} />
               <div className="flex-1">
                 <p className="text-sm font-medium">{item.content}</p>
+                {item.video_url && (
+                  <div className="mt-2 p-2 bg-muted rounded-md">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <MessageSquare className="h-4 w-4" />
+                      <span>Video Transcript Status: {item.transcript_status}</span>
+                    </div>
+                    {item.video_title && (
+                      <p className="mt-1 text-sm font-medium">{item.video_title}</p>
+                    )}
+                  </div>
+                )}
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <Badge
                     variant="outline"
@@ -182,6 +216,17 @@ const FactCheckingFeed = () => {
                     {new Date(item.timestamp || item.created_at || '').toLocaleTimeString()}
                   </span>
                 </div>
+                {item.factChecks && item.factChecks.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    <h4 className="text-sm font-semibold">Fact Check Results:</h4>
+                    {item.factChecks.map((check, index) => (
+                      <div key={index} className="text-sm pl-2 border-l-2 border-accent">
+                        <p className="font-medium">{check.verification_source}</p>
+                        <p className="text-muted-foreground">{check.explanation}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           ))}
