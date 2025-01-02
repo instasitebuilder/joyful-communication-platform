@@ -18,6 +18,7 @@ serve(async (req) => {
     );
 
     const { broadcastId } = await req.json();
+    console.log('Processing broadcast:', broadcastId);
 
     // Fetch the broadcast content
     const { data: broadcast, error: fetchError } = await supabaseClient
@@ -27,8 +28,11 @@ serve(async (req) => {
       .single();
 
     if (fetchError || !broadcast) {
+      console.error('Failed to fetch broadcast:', fetchError);
       throw new Error('Failed to fetch broadcast');
     }
+
+    console.log('Fetched broadcast:', broadcast);
 
     // Call ClaimBuster API
     const claimBusterResponse = await fetch(
@@ -43,11 +47,21 @@ serve(async (req) => {
       }
     );
 
+    if (!claimBusterResponse.ok) {
+      console.error('ClaimBuster API error:', await claimBusterResponse.text());
+      throw new Error('Failed to get response from ClaimBuster API');
+    }
+
     const claimBusterData = await claimBusterResponse.json();
     console.log('ClaimBuster response:', claimBusterData);
 
+    if (!claimBusterData.results || !claimBusterData.results[0]) {
+      throw new Error('Invalid response format from ClaimBuster API');
+    }
+
     // Calculate confidence based on ClaimBuster score
     const confidence = Math.round(claimBusterData.results[0].score * 100);
+    console.log('Calculated confidence:', confidence);
 
     // Update the broadcast with AI processing results
     const { error: updateError } = await supabaseClient
@@ -60,6 +74,7 @@ serve(async (req) => {
       .eq('id', broadcastId);
 
     if (updateError) {
+      console.error('Failed to update broadcast:', updateError);
       throw new Error('Failed to update broadcast');
     }
 
@@ -75,6 +90,7 @@ serve(async (req) => {
       });
 
     if (factCheckError) {
+      console.error('Failed to create fact check:', factCheckError);
       throw new Error('Failed to create fact check');
     }
 
