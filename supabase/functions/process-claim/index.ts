@@ -35,32 +35,54 @@ serve(async (req) => {
     console.log('Fetched broadcast:', broadcast);
 
     // Call ClaimBuster API
+    const apiKey = Deno.env.get('CLAIMBUSTER_API_KEY');
+    if (!apiKey) {
+      throw new Error('CLAIMBUSTER_API_KEY is not set');
+    }
+
     const claimBusterResponse = await fetch(
       'https://idir.uta.edu/claimbuster/api/v2/score/text/',
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': Deno.env.get('CLAIMBUSTER_API_KEY') ?? '',
+          'x-api-key': apiKey,
         },
         body: JSON.stringify({ text: broadcast.content }),
       }
     );
 
+    console.log('ClaimBuster API Status:', claimBusterResponse.status);
+    const responseText = await claimBusterResponse.text();
+    console.log('ClaimBuster Raw Response:', responseText);
+
     if (!claimBusterResponse.ok) {
-      console.error('ClaimBuster API error:', await claimBusterResponse.text());
-      throw new Error('Failed to get response from ClaimBuster API');
+      throw new Error(`ClaimBuster API error: ${responseText}`);
     }
 
-    const claimBusterData = await claimBusterResponse.json();
-    console.log('ClaimBuster response:', claimBusterData);
+    let claimBusterData;
+    try {
+      claimBusterData = JSON.parse(responseText);
+    } catch (e) {
+      console.error('Failed to parse ClaimBuster response:', e);
+      throw new Error('Invalid JSON response from ClaimBuster API');
+    }
 
-    if (!claimBusterData.results || !claimBusterData.results[0]) {
-      throw new Error('Invalid response format from ClaimBuster API');
+    console.log('Parsed ClaimBuster response:', claimBusterData);
+
+    if (!claimBusterData.results || !Array.isArray(claimBusterData.results) || claimBusterData.results.length === 0) {
+      console.error('Invalid response structure:', claimBusterData);
+      throw new Error('Invalid response structure from ClaimBuster API');
+    }
+
+    const result = claimBusterData.results[0];
+    if (typeof result.score !== 'number') {
+      console.error('Invalid score type:', result);
+      throw new Error('Invalid score format from ClaimBuster API');
     }
 
     // Calculate confidence based on ClaimBuster score
-    const confidence = Math.round(claimBusterData.results[0].score * 100);
+    const confidence = Math.round(result.score * 100);
     console.log('Calculated confidence:', confidence);
 
     // Update the broadcast with AI processing results
