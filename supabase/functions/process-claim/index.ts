@@ -27,9 +27,13 @@ serve(async (req) => {
       .eq('id', broadcastId)
       .single();
 
-    if (fetchError || !broadcast) {
+    if (fetchError) {
       console.error('Failed to fetch broadcast:', fetchError);
-      throw new Error('Failed to fetch broadcast');
+      throw new Error(`Failed to fetch broadcast: ${fetchError.message}`);
+    }
+
+    if (!broadcast) {
+      throw new Error('Broadcast not found');
     }
 
     console.log('Fetched broadcast:', broadcast);
@@ -56,10 +60,6 @@ serve(async (req) => {
     const claimBusterText = await claimBusterResponse.text();
     console.log('ClaimBuster Raw Response:', claimBusterText);
 
-    if (!claimBusterResponse.ok) {
-      throw new Error(`ClaimBuster API error: ${claimBusterText}`);
-    }
-
     let claimBusterData;
     try {
       claimBusterData = JSON.parse(claimBusterText);
@@ -83,7 +83,7 @@ serve(async (req) => {
     const googleData = await googleResponse.json();
     console.log('Google Fact Check Response:', googleData);
 
-    // Combine results from both APIs
+    // Calculate confidence and status
     const claimBusterConfidence = claimBusterData.results?.[0]?.score 
       ? Math.round(claimBusterData.results[0].score * 100)
       : 0;
@@ -94,57 +94,57 @@ serve(async (req) => {
       claim.claimReview?.[0]?.textualRating?.toLowerCase().includes('correct')
     );
 
-    // Calculate combined confidence
     const confidence = googleVerified ? Math.max(claimBusterConfidence, 80) : claimBusterConfidence;
     const status = confidence > 80 ? 'verified' : confidence < 40 ? 'debunked' : 'flagged';
 
-    // Update the broadcast
+    // Update the broadcast with a transaction
     const { error: updateError } = await supabaseClient
       .from('broadcasts')
       .update({
-        confidence: confidence,
+        confidence,
         api_processed: true,
-        status: status
+        status
       })
       .eq('id', broadcastId);
 
     if (updateError) {
       console.error('Failed to update broadcast:', updateError);
-      throw new Error('Failed to update broadcast');
+      throw new Error(`Failed to update broadcast: ${updateError.message}`);
     }
 
-    // Create fact check entries for both APIs
+    // Prepare fact check entries
     const factChecks = [];
     
-    // ClaimBuster fact check
+    // Add ClaimBuster fact check
     factChecks.push({
       broadcast_id: broadcastId,
       verification_source: 'ClaimBuster API',
       explanation: `Claim check score: ${claimBusterConfidence}%`,
-      confidence_score: claimBusterConfidence,
-      verification_method: 'ai'
+      confidence_score: claimBusterConfidence
     });
 
-    // Google fact checks
+    // Add Google fact checks
     googleClaims.forEach(claim => {
       if (claim.claimReview?.[0]) {
         factChecks.push({
           broadcast_id: broadcastId,
           verification_source: 'Google Fact Check API',
           explanation: claim.claimReview[0].textualRating,
-          confidence_score: googleVerified ? 90 : 30,
-          verification_method: 'google'
+          confidence_score: googleVerified ? 90 : 30
         });
       }
     });
 
-    const { error: factCheckError } = await supabaseClient
-      .from('fact_checks')
-      .insert(factChecks);
+    // Insert fact checks
+    if (factChecks.length > 0) {
+      const { error: factCheckError } = await supabaseClient
+        .from('fact_checks')
+        .insert(factChecks);
 
-    if (factCheckError) {
-      console.error('Failed to create fact checks:', factCheckError);
-      throw new Error('Failed to create fact checks');
+      if (factCheckError) {
+        console.error('Failed to create fact checks:', factCheckError);
+        throw new Error(`Failed to create fact checks: ${factCheckError.message}`);
+      }
     }
 
     return new Response(
@@ -160,8 +160,14 @@ serve(async (req) => {
   } catch (error) {
     console.error('Error processing claim:', error);
     return new Response(
-      JSON.stringify({ error: error.message }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ 
+        error: error.message,
+        details: error.stack 
+      }),
+      { 
+        status: 500, 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      }
     );
   }
 });
