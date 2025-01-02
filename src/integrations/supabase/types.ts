@@ -19,7 +19,10 @@ export type Database = {
           speaker: string | null
           status: string | null
           timestamp: string | null
+          transcript_status: string | null
           updated_at: string | null
+          video_title: string | null
+          video_url: string | null
         }
         Insert: {
           confidence?: number | null
@@ -30,7 +33,10 @@ export type Database = {
           speaker?: string | null
           status?: string | null
           timestamp?: string | null
+          transcript_status?: string | null
           updated_at?: string | null
+          video_title?: string | null
+          video_url?: string | null
         }
         Update: {
           confidence?: number | null
@@ -41,7 +47,10 @@ export type Database = {
           speaker?: string | null
           status?: string | null
           timestamp?: string | null
+          transcript_status?: string | null
           updated_at?: string | null
+          video_title?: string | null
+          video_url?: string | null
         }
         Relationships: []
       }
