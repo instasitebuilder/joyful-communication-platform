@@ -44,15 +44,15 @@ serve(async (req) => {
       throw new Error('CLAIMBUSTER_API_KEY is not set');
     }
 
+    // Encode the text for URL
+    const encodedText = encodeURIComponent(broadcast.content);
     const claimBusterResponse = await fetch(
-      'https://idir.uta.edu/claimbuster/api/v2/score/text/',
+      `https://idir.uta.edu/claimbuster/api/v2/score/text/${encodedText}`,
       {
-        method: 'POST',
+        method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
           'x-api-key': claimBusterKey,
         },
-        body: JSON.stringify({ text: broadcast.content }),
       }
     );
 
